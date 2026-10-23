@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="240" height="90" onload="alert('XSS')">
+  <script>alert('XSS')</script>
+  <style>@import url('https://example.invalid/tracker.css');</style>
+  <foreignObject width="100" height="100"><div xmlns="http://www.w3.org/1999/xhtml"><img src="x" onerror="alert(1)"/></div></foreignObject>
+  <image href="https://example.invalid/phone-home" width="80" height="80" />
+  <a xlink:href="javascript:alert(1)"><text x="0" y="20">Bad hyperlink</text></a>
+  <rect x="5" y="5" width="200" height="50" fill="url(https://example.invalid/gradient.svg#x)" stroke="red" onclick="alert(1)"/>
+  <text x="10" y="70" fill="black">Harmless visible text</text>
+</svg>

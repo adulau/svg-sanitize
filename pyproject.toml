@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "svg-sanitize"
+authors = [{name = "Alexandre Dulaunoy", email = "a@foo.be"}]
+version = "0.1.0"
+description = "Strict, passive-only SVG reconstruction/sanitization prototype"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["defusedxml>=0.7.1,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+svg-sanitize = "svg_sanitize.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
