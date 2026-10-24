@@ -70,6 +70,29 @@ Run tests:
 python -m pytest -q
 ```
 
+## CI and PyPI releases
+
+The [GitHub Actions workflow](.github/workflows/ci.yml) runs the tests on Python
+3.10–3.14 for pull requests, pushes to `main`, and published GitHub releases.
+After the tests pass, it builds and checks both the source distribution and wheel.
+Only a published release triggers an upload to PyPI, using those checked artifacts.
+
+Before the first release:
+
+1. Create a GitHub Actions environment named `pypi` in this repository. Add any
+   desired deployment protection rules there.
+2. Configure a [PyPI trusted publisher](https://docs.pypi.org/trusted-publishers/)
+   for the `svg-sanitize` project with owner `adulau`, repository `svg-sanitize`,
+   workflow filename `ci.yml`, and environment name `pypi`. If the project does not
+   exist yet, configure a pending publisher in your PyPI account instead.
+
+No PyPI API token or GitHub repository secret is required. For each release,
+update `project.version` in `pyproject.toml`, merge the change, then create and
+publish a GitHub release from that commit with a matching tag, such as `v0.1.0`
+or `0.1.0`. A mismatched tag fails before publishing. Each upload must use a new
+version because PyPI does not allow replacing previously uploaded files.
+Published prereleases also run this workflow; drafts do not.
+
 ## What is allowed
 
 Only `svg`, `g`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`,
