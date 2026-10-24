@@ -11,9 +11,11 @@ import math
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from typing import Literal
 
 from defusedxml import ElementTree as SafeET
 from defusedxml.common import DefusedXmlException
+import tinycss2
 
 SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", SVG_NS)
@@ -33,16 +35,27 @@ class Limits:
     max_attribute_chars: int = 65_536
     max_text_chars: int = 100_000
     max_path_chars: int = 65_536
+    max_marker_nodes: int = 128
+    max_marker_references: int = 256
 
 
 DEFAULT_LIMITS = Limits()
 
-# Deliberately exclude: script, style, a, use, image, foreignObject, animate,
+# Strict mode deliberately excludes: script, style, a, use, image, foreignObject, animate,
 # set, filter, mask, clipPath, pattern, gradients, defs, metadata, etc.
 CONTAINERS = frozenset({"svg", "g"})
 SHAPES = frozenset({"rect", "circle", "ellipse", "line", "polyline", "polygon", "path"})
 TEXT_TAGS = frozenset({"text", "tspan"})
 ALLOWED_TAGS = CONTAINERS | SHAPES | TEXT_TAGS
+VISUAL_TAGS = ALLOWED_TAGS | {"defs", "marker"}
+MARKER_PROPERTIES = frozenset({"marker-start", "marker-mid", "marker-end"})
+MARKER_GEOMETRY = frozenset({
+    "refX", "refY", "markerWidth", "markerHeight", "markerUnits", "orient",
+    "viewBox", "preserveAspectRatio", "overflow",
+})
+XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+LOCAL_ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,127}\Z", re.ASCII)
+MARKER_URL_RE = re.compile(r'''url\(\s*(["']?)\#([A-Za-z_][A-Za-z0-9_.-]{0,127})\1\s*\)\Z''', re.IGNORECASE | re.ASCII)
 
 PRESENTATION = frozenset({
     "fill", "fill-opacity", "fill-rule", "stroke", "stroke-width",
@@ -93,6 +106,13 @@ FONT_FAMILIES = {
     "times new roman": "Times New Roman", "courier new": "Courier New",
     "serif": "serif", "sans-serif": "sans-serif", "monospace": "monospace",
     "system-ui": "system-ui",
+}
+VISUAL_FONTS = {
+    **FONT_FAMILIES,
+    "dejavu sans": "DejaVu Sans", "dejavu sans condensed": "DejaVu Sans Condensed",
+    "dejavu serif": "DejaVu Serif", "dejavu sans mono": "DejaVu Sans Mono",
+    "liberation sans": "Liberation Sans", "liberation serif": "Liberation Serif",
+    "liberation mono": "Liberation Mono",
 }
 ATTRIBUTE_OPTIONS = {
     "fill-rule": {"evenodd", "nonzero"},
@@ -316,7 +336,14 @@ def _check_complexity(root: ET.Element, limits: Limits) -> None:
         stack.extend((child, depth + 1) for child in node)
 
 
-def _can_contain(parent: str, child: str) -> bool:
+def _can_contain(parent: str, child: str, visual: bool = False, resource: bool = False) -> bool:
+    if visual:
+        if parent == "defs":
+            return child == "marker"
+        if parent == "marker":
+            return child in ({"g"} | SHAPES | {"text"})
+        if parent in CONTAINERS and child == "defs":
+            return not resource
     if parent in CONTAINERS:
         return child in (CONTAINERS | SHAPES | {"text"})
     if parent in TEXT_TAGS:
@@ -324,11 +351,140 @@ def _can_contain(parent: str, child: str) -> bool:
     return False
 
 
-def sanitize_svg(data: str | bytes, *, limits: Limits = DEFAULT_LIMITS) -> str:
+def _marker_ids(root: ET.Element, namespace: str | None) -> dict[str, str]:
+    """Register only reachable markers with unambiguous, bounded local IDs."""
+    counts: dict[str, int] = {}
+    for node in root.iter():
+        identifier = node.get("id", "")
+        counts[identifier] = counts.get(identifier, 0) + 1
+    markers: dict[str, str] = {}
+    stack = [(root, "svg", False)]
+    while stack:
+        node, tag, resource = stack.pop()
+        if tag == "marker":
+            identifier = node.get("id", "")
+            if counts[identifier] == 1 and LOCAL_ID_RE.fullmatch(identifier):
+                markers[identifier] = f"svg-sanitize-marker-{len(markers)}"
+        children = []
+        for child in node:
+            child_ns, child_tag = _tag_parts(child.tag)
+            if (child_ns == namespace and child_tag in VISUAL_TAGS
+                    and _can_contain(tag, child_tag, True, resource)):
+                children.append((child, child_tag, resource or child_tag == "defs"))
+        stack.extend(reversed(children))
+    return markers
+
+
+def _visual_attribute(
+    name: str, value: str, limits: Limits, markers: dict[str, str], resource: bool,
+) -> str | None:
+    if not value or len(value) > limits.max_attribute_chars or TEXT_CONTROL_RE.search(value):
+        return None
+    value = value.strip()
+    if name in MARKER_PROPERTIES:
+        if value == "none":
+            return value
+        match = MARKER_URL_RE.fullmatch(value)
+        if not resource and match and match.group(2) in markers:
+            return f"url(#{markers[match.group(2)]})"
+        return None
+    if name == "font-family":
+        parts = [part.strip().strip("\"'").lower() for part in value.split(",")]
+        if not (1 <= len(parts) <= 5) or any(part not in VISUAL_FONTS for part in parts):
+            return None
+        return ", ".join(VISUAL_FONTS[part] for part in parts)
+    if name == "font-stretch":
+        return value if value in {"normal", "condensed", "semi-condensed", "expanded", "semi-expanded"} else None
+    if name == "overflow":
+        return value if value in {"visible", "hidden"} else None
+    if name == "markerUnits":
+        return value if value in {"strokeWidth", "userSpaceOnUse"} else None
+    if name == "orient":
+        return value if value in {"auto", "auto-start-reverse"} or _number(value) else None
+    length_name = name
+    if name in {"refX", "refY"}:
+        length_name = "x"
+    elif name in {"markerWidth", "markerHeight"}:
+        length_name = "width"
+    safe = _attribute(length_name, value, limits)
+    if safe is not None:
+        return safe
+    # Physical/font-relative units remain finite numbers, never CSS expressions.
+    if length_name in (COORD_ATTRS | OTHER_LENGTH_ATTRS | NONNEG_LENGTH_ATTRS):
+        match = re.fullmatch(rf"({NUMBER})(pt|pc|mm|cm|in|em|ex)", value, re.ASCII)
+        minimum = 0 if length_name in NONNEG_LENGTH_ATTRS else -10_000_000
+        if match and _number(match.group(1), minimum=minimum):
+            return value
+    return None
+
+
+def _style_declarations(style: str):
+    """Parse inline declarations; never emit CSS or serialize nested expressions."""
+    flat = {"ident", "number", "dimension", "percentage", "whitespace", "literal", "hash", "string", "url"}
+    for declaration in tinycss2.parse_declaration_list(style, skip_comments=True, skip_whitespace=True):
+        if declaration.type != "declaration":
+            continue
+        tokens = [token for token in declaration.value if token.type != "comment"]
+        valid = True
+        for token in tokens:
+            if token.type == "function":
+                if (token.lower_name not in {"rgb", "rgba", "url"}
+                        or any(part.type not in flat - {"url"} for part in token.arguments)):
+                    valid = False
+                    break
+            elif token.type not in flat:
+                valid = False
+                break
+        if valid:
+            yield declaration.lower_name, tinycss2.serialize(tokens).strip(), declaration.important
+
+
+def _copy_attributes(
+    original: ET.Element, clean: ET.Element, tag: str, limits: Limits,
+    visual: bool, markers: dict[str, str], resource: bool,
+) -> None:
+    presentation = PRESENTATION | (MARKER_PROPERTIES | {"font-stretch"} if visual else set())
+    geometry = MARKER_GEOMETRY if tag == "marker" else GEOMETRY.get(tag, frozenset())
+    if tag == "marker":
+        clean.set("id", markers[original.attrib["id"]])
+        # Block references inherited from an ancestor svg/g as well as explicit
+        # references in the definition, so marker contents cannot recurse.
+        for key in ("marker-start", "marker-mid", "marker-end"):
+            clean.set(key, "none")
+    for key, value in original.attrib.items():
+        if visual and key == XML_SPACE and value in {"default", "preserve"}:
+            clean.set(key, value)
+            continue
+        if key.startswith("{") or ":" in key or (key not in presentation and key not in geometry):
+            continue
+        safe = (_visual_attribute(key, value, limits, markers, resource) if visual
+                else _attribute(key, value, limits))
+        if safe is not None:
+            clean.set(key, safe)
+    if visual:
+        important = set()
+        for key, value, priority in _style_declarations(original.get("style", "")):
+            if key not in presentation and not (tag == "marker" and key == "overflow"):
+                continue
+            safe = _visual_attribute(key, value, limits, markers, resource)
+            if safe is not None and (priority or key not in important):
+                clean.set(key, safe)
+                if priority:
+                    important.add(key)
+
+
+def sanitize_svg(
+    data: str | bytes, *, limits: Limits = DEFAULT_LIMITS,
+    mode: Literal["strict", "visual"] = "strict",
+) -> str:
     """Return a rebuilt, self-contained, passive SVG document.
 
-    No CSS, URLs, links, event handlers, animation, scripts, resource references,
-    foreign elements, or XML entities survive. Unsupported subtrees are removed.
+    Strict mode (default) retains only the original minimal primitive subset.
+    Visual mode converts validated inline presentation CSS to attributes and
+    allows bounded, sanitized local markers, additional local fonts and units.
+    Neither mode retains scripts, events, CSS stylesheets, external resources,
+    embedded images, links, animation, foreign elements, or XML entities.
+    Unsupported subtrees are removed; arbitrary SVG rendering is not preserved.
     Malformed XML, DTDs, entities, wrong roots, and oversized inputs are rejected.
 
     This is defense-in-depth, not a browser isolation boundary. Prefer rendering
@@ -336,6 +492,8 @@ def sanitize_svg(data: str | bytes, *, limits: Limits = DEFAULT_LIMITS) -> str:
     """
     if not isinstance(data, (str, bytes)):
         raise TypeError("data must be str or bytes")
+    if mode not in ("strict", "visual"):
+        raise ValueError("mode must be 'strict' or 'visual'")
     if len(data if isinstance(data, bytes) else data.encode("utf-8")) > limits.max_input_bytes:
         raise SVGValidationError("SVG input exceeds byte limit")
 
@@ -349,30 +507,30 @@ def sanitize_svg(data: str | bytes, *, limits: Limits = DEFAULT_LIMITS) -> str:
         raise SVGValidationError("Input must have an SVG root element")
 
     _check_complexity(root, limits)
+    visual = mode == "visual"
+    markers = _marker_ids(root, namespace) if visual else {}
+    allowed = VISUAL_TAGS if visual else ALLOWED_TAGS
     clean_root = ET.Element(f"{{{SVG_NS}}}svg")
-    stack = [(root, clean_root, "svg")]
+    stack = [(root, clean_root, "svg", False)]
+    marker_references = 0
     while stack:
-        original, clean, current_tag = stack.pop()
-        for key, value in original.attrib.items():
-            # Reject namespaced attributes, including xlink:href and xml:base.
-            if key.startswith("{") or ":" in key:
-                continue
-            if key not in PRESENTATION and key not in GEOMETRY[current_tag]:
-                continue
-            safe_value = _attribute(key, value, limits)
-            if safe_value is not None:
-                clean.set(key, safe_value)
+        original, clean, current_tag, resource = stack.pop()
+        _copy_attributes(original, clean, current_tag, limits, visual, markers, resource)
+        marker_references += sum(clean.get(key, "").startswith("url(") for key in MARKER_PROPERTIES)
+        if marker_references > limits.max_marker_references:
+            raise SVGValidationError("SVG exceeds marker reference limit")
 
         if current_tag in TEXT_TAGS:
             clean.text = _clean_text(original.text)
 
-        children_to_visit: list[tuple[ET.Element, ET.Element, str]] = []
+        children_to_visit = []
         for child in original:
             child_ns, child_name = _tag_parts(child.tag)
-            if (child_ns == namespace and child_name in ALLOWED_TAGS
-                    and _can_contain(current_tag, child_name)):
+            if (child_ns == namespace and child_name in allowed
+                    and _can_contain(current_tag, child_name, visual, resource)
+                    and (child_name != "marker" or child.get("id") in markers)):
                 child_out = ET.SubElement(clean, f"{{{SVG_NS}}}{child_name}")
-                children_to_visit.append((child, child_out, child_name))
+                children_to_visit.append((child, child_out, child_name, resource or child_name == "defs"))
 
             # 'tail' belongs to the parent text flow, not to a removed element.
             # Preserve that harmless visible text; never copy removed subtree text.
@@ -385,6 +543,14 @@ def sanitize_svg(data: str | bytes, *, limits: Limits = DEFAULT_LIMITS) -> str:
                     clean.text = (clean.text or "") + (tail or "")
 
         stack.extend(reversed(children_to_visit))
+
+    if visual:
+        for node in clean_root.iter():
+            if node.tag == f"{{{SVG_NS}}}marker" and sum(1 for _ in node.iter()) > limits.max_marker_nodes:
+                raise SVGValidationError("SVG marker exceeds element-count limit")
+            for child in list(node):
+                if child.tag == f"{{{SVG_NS}}}defs" and not len(child):
+                    node.remove(child)
 
     output = ET.tostring(clean_root, encoding="unicode", short_empty_elements=True)
     if len(output.encode("utf-8")) > limits.max_output_bytes:

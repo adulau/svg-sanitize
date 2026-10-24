@@ -19,9 +19,11 @@ The entity-expansion sample is deliberately bounded to 16 short strings.
   A copy of the license is in [CC-BY-SA-4.0.txt](CC-BY-SA-4.0.txt).
 - SHA-256: `072eda1ef64aad298a6c3c28498bebb2142d8bbcbc0bd771a604875aff531eac`
 
-All SVG artwork in this directory, including the modified fixtures, is distributed
+All SVG artwork and rendered comparison images in this directory are distributed
 under CC BY-SA 4.0, separately from the repository's MIT-licensed Python code.
-Each generated SVG includes an attribution, license link, and modification notice.
+Each generated attack/control SVG includes an attribution, license link, and modification notice.
+Sanitized preview SVGs omit metadata by design; their attribution and license
+are provided by this README and the bundled license.
 No endorsement by the map's authors is implied.
 
 `clean.svg` keeps the original coordinate system and the exact path data of the
@@ -30,12 +32,39 @@ capital label and its original position. Selected CSS presentation values are
 converted to SVG attributes; other layers, symbols, embedded imagery, and editor
 metadata are omitted. This compact base avoids repeating the entire 915 KB
 original in every attack fixture. The full original is also tested independently.
-These tests check structural preservation of supported geometry and text; they
-do not assert pixel-for-pixel rendering of the original map.
+The compact-map tests check structural preservation; a separate full-map render
+comparison checks visual mode's appearance against the original.
+
+## Visual comparison
+
+| Original map | Strict mode (default) | Visual mode |
+| --- | --- | --- |
+| ![Original map](preview/original.png) | ![Strict output](preview/strict.png) | ![Visual output](preview/visual.png) |
+
+The previews show why primitive-only reconstruction loses detail: the original
+stores colors, line widths, fonts, and hidden-layer settings in inline styles.
+`mode="visual"` converts validated declarations to attributes and preserves the
+map's sanitized local railway marker. It keeps external images and unsupported
+resources removed. The original's unresolved image belongs to a hidden layer.
+
+Download the [strict SVG](preview/strict.svg) or [visual SVG](preview/visual.svg)
+to inspect the actual outputs. Previews were produced with Inkscape; their
+[metrics](preview/metrics.json) compare each output with the original using the
+same renderer and fonts. The image test permits at most 2% of pixels to differ
+by more than 8 channel levels, limits normalized mean channel error to 0.005,
+and requires at least a 100-fold improvement over strict mode's mean error.
+This is a regression for this map, not a fidelity guarantee for arbitrary SVGs.
+
+To regenerate previews, install Inkscape, DejaVu fonts, and `pip install -e '.[test,render]'`,
+then run `python tools/render_luxembourg.py` from the repository root. The helper
+checks the source checksum and renders only the original and sanitized outputs.
+It does not render attack variants. The render comparison runs in a dedicated
+CI job; other tests do not require a renderer.
 
 ## Cases
 
-All attack files are standalone derivatives of `clean.svg`.
+All attack files are standalone derivatives of `clean.svg`. Library and CLI
+attack regressions exercise both strict and visual modes.
 
 | Fixtures | Use case | Expected result |
 | --- | --- | --- |
@@ -65,7 +94,8 @@ output with the clean control. Separate assertions anchor that control to the
 original paths, colors, dimensions, and capital label, so dropping all content
 cannot pass. Tests cover both bytes and text inputs, idempotence, custom byte/path
 limit boundaries, and CLI success, rejection, and preservation of existing output.
-No test downloads files, renders SVG, or executes the embedded payloads.
+No test downloads files or executes the embedded payloads. Only the separate
+render comparison renders SVG, using the pinned original and sanitizer outputs.
 
 ## Regeneration
 

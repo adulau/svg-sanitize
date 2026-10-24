@@ -104,26 +104,29 @@ def test_compact_map_is_derived_from_source_and_retains_colors(original):
 
 @pytest.mark.parametrize("filename", SANITIZED)
 @pytest.mark.parametrize("as_text", [False, True], ids=["bytes", "str"])
-def test_attack_removed_without_losing_map(filename, as_text):
+@pytest.mark.parametrize("mode", ["strict", "visual"])
+def test_attack_removed_without_losing_map(filename, as_text, mode):
     data = read(filename)
     assert data != read("clean.svg")
-    output = sanitize_svg(data.decode("utf-8") if as_text else data)
+    output = sanitize_svg(data.decode("utf-8") if as_text else data, mode=mode)
     assert_passive(output)
     # A sanitizer that drops the entire map must not pass these regressions.
-    assert output == sanitize_svg(read("clean.svg"))
-    assert sanitize_svg(output) == output
+    assert output == sanitize_svg(read("clean.svg"), mode=mode)
+    assert sanitize_svg(output, mode=mode) == output
 
 
 @pytest.mark.parametrize("filename,reason", REJECTED.items())
 @pytest.mark.parametrize("as_text", [False, True], ids=["bytes", "str"])
-def test_invalid_or_excessive_map_rejected(filename, reason, as_text):
+@pytest.mark.parametrize("mode", ["strict", "visual"])
+def test_invalid_or_excessive_map_rejected(filename, reason, as_text, mode):
     data = read(filename)
     with pytest.raises(SVGValidationError, match=reason):
-        sanitize_svg(data.decode("utf-8") if as_text else data)
+        sanitize_svg(data.decode("utf-8") if as_text else data, mode=mode)
 
 
-def test_escaped_markup_is_text_and_never_becomes_an_element():
-    output = sanitize_svg(read("escaped-text.svg"))
+@pytest.mark.parametrize("mode", ["strict", "visual"])
+def test_escaped_markup_is_text_and_never_becomes_an_element(mode):
+    output = sanitize_svg(read("escaped-text.svg"), mode=mode)
     root = assert_passive(output)
     label = root.find(".//svg:text", NS)
     assert label is not None
@@ -131,7 +134,7 @@ def test_escaped_markup_is_text_and_never_becomes_an_element():
     assert len(label) == 0
     assert "&lt;script&gt;" in output and "&amp;" in output
     assert len(root.findall(".//svg:path", NS)) == 3
-    assert sanitize_svg(output) == output
+    assert sanitize_svg(output, mode=mode) == output
 
 
 def test_map_input_byte_limit_boundary():
@@ -171,27 +174,29 @@ def test_path_budget_drops_only_overlong_geometry():
     ("clean.svg", 0), ("inline-script.svg", 0), ("css.svg", 0),
     ("file-entity.svg", 1), ("malformed.svg", 1), ("deep-nesting.svg", 1),
 ])
-def test_cli_map_files(tmp_path, filename, exit_code):
+@pytest.mark.parametrize("mode", ["strict", "visual"])
+def test_cli_map_files(tmp_path, filename, exit_code, mode):
     destination = tmp_path / "sanitized.svg"
     result = subprocess.run(
-        [sys.executable, "-m", "svg_sanitize", str(FIXTURES / filename), "-o", str(destination)],
+        [sys.executable, "-m", "svg_sanitize", str(FIXTURES / filename), "--mode", mode, "-o", str(destination)],
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == exit_code, result.stderr
     if exit_code == 0:
         assert not result.stderr and not result.stdout
-        assert destination.read_text(encoding="utf-8").rstrip("\n") == sanitize_svg(read("clean.svg"))
+        assert destination.read_text(encoding="utf-8").rstrip("\n") == sanitize_svg(read("clean.svg"), mode=mode)
     else:
         assert not destination.exists()
         assert not result.stdout
         assert result.stderr.startswith("svg-sanitize: ")
 
 
-def test_cli_rejection_preserves_existing_output(tmp_path):
+@pytest.mark.parametrize("mode", ["strict", "visual"])
+def test_cli_rejection_preserves_existing_output(tmp_path, mode):
     destination = tmp_path / "existing.svg"
     destination.write_bytes(b"previous output")
     result = subprocess.run(
-        [sys.executable, "-m", "svg_sanitize", str(FIXTURES / "remote-entity.svg"), "-o", str(destination)],
+        [sys.executable, "-m", "svg_sanitize", str(FIXTURES / "remote-entity.svg"), "--mode", mode, "-o", str(destination)],
         capture_output=True, timeout=10,
     )
     assert result.returncode == 1

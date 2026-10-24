@@ -10,10 +10,11 @@ description = "Strict, passive-only SVG reconstruction/sanitization prototype"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-dependencies = ["defusedxml>=0.7.1,<1"]
+dependencies = ["defusedxml>=0.7.1,<1", "tinycss2>=1.2,<2"]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+render = ["Pillow>=10"]
 
 [project.scripts]
 svg-sanitize = "svg_sanitize.__main__:main"
