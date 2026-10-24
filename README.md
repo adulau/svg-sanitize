@@ -93,6 +93,20 @@ or `0.1.0`. A mismatched tag fails before publishing. Each upload must use a new
 version because PyPI does not allow replacing previously uploaded files.
 Published prereleases also run this workflow; drafts do not.
 
+## Luxembourg SVG regression corpus
+
+The [fixture corpus](tests/fixtures/luxembourg/README.md) includes the original
+Wikimedia Luxembourg map and standalone attack variants derived from its region
+outlines. It covers active content, external references, XML attacks, invalid
+values, and resource limits, with offline library and CLI regression tests:
+
+```bash
+python -m pytest -q tests/test_luxembourg.py
+```
+
+Treat the attack fixtures as untrusted SVG. The map artwork and derivatives are
+CC BY-SA 4.0; attribution and license details are included with the corpus.
+
 ## What is allowed
 
 Only `svg`, `g`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`,
