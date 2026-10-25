@@ -1,0 +1,10 @@
+{
+  "strict": {
+    "mean_channel_error": 0.42150559508300767,
+    "changed_pixel_fraction": 0.9965095589627105
+  },
+  "visual": {
+    "mean_channel_error": 1.065199882716668e-06,
+    "changed_pixel_fraction": 0.0
+  }
+}

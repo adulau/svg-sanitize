@@ -11,12 +11,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Strip SVG down to static visual primitives")
     parser.add_argument("input", type=Path, help="SVG input file")
     parser.add_argument("-o", "--output", type=Path, help="SVG output file (default stdout)")
+    parser.add_argument("--mode", choices=("strict", "visual"), default="strict",
+                        help="strict primitives (default) or validated visual styling and local markers")
     args = parser.parse_args()
     limits = Limits()
     try:
         with args.input.open("rb") as f:
             content = f.read(limits.max_input_bytes + 1)
-        cleaned = sanitize_svg(content, limits=limits)
+        cleaned = sanitize_svg(content, limits=limits, mode=args.mode)
         if args.output:
             args.output.write_text(cleaned + "\n", encoding="utf-8")
         else:
