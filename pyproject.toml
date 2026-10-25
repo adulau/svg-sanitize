@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "svg-sanitize"
 authors = [{name = "Alexandre Dulaunoy", email = "a@foo.be"}]
-version = "0.1.0"
+version = "0.2.0"
 description = "Strict, passive-only SVG reconstruction/sanitization prototype"
 readme = "README.md"
 requires-python = ">=3.10"
