@@ -1,0 +1,3 @@
+# Checksums and regeneration compare raw SVG bytes, including line endings.
+# Keep text diffs while disabling checkout/check-in line-ending conversion.
+tests/fixtures/luxembourg/**/*.svg -text

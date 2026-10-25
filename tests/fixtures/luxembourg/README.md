@@ -19,6 +19,11 @@ The entity-expansion sample is deliberately bounded to 16 short strings.
   A copy of the license is in [CC-BY-SA-4.0.txt](CC-BY-SA-4.0.txt).
 - SHA-256: `072eda1ef64aad298a6c3c28498bebb2142d8bbcbc0bd771a604875aff531eac`
 
+The repository's `.gitattributes` preserves every SVG fixture's exact bytes,
+including line endings, even with Git's `core.autocrlf=true` on Windows. This
+also covers sanitized preview SVGs. The source checksum and generator checks
+therefore do not depend on the checkout platform.
+
 All SVG artwork and rendered comparison images in this directory are distributed
 under CC BY-SA 4.0, separately from the repository's MIT-licensed Python code.
 Each generated attack/control SVG includes an attribution, license link, and modification notice.
